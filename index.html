@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini Git Visualizer</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--blue:#58a6ff;--green:#3fb950;--red:#f85149}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;display:grid;grid-template-rows:auto 1fr auto;gap:12px;padding:12px}
+.mono{font-family:ui-monospace,Consolas,"Courier New",monospace}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+h2{font-size:13px;margin:0 0 8px;color:var(--mut);font-weight:600}
+#top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#top h1{font-size:17px;margin:0;margin-right:auto}
+.badge{border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;background:#0d1117}
+.badge b{color:var(--blue);font-weight:600}
+#main{display:grid;grid-template-columns:260px 1fr 280px;gap:12px;min-height:0}
+#left,#right{overflow:auto;display:flex;flex-direction:column;gap:10px}
+.row{display:flex;gap:6px;margin-bottom:6px}
+.row:last-child{margin-bottom:0}
+button{background:#21262d;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font:inherit;min-width:76px}
+button:hover{background:#30363d}
+button.go{background:#238636;border-color:#2ea043}
+button.go:hover{background:#2ea043}
+button:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+input{background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;min-width:0;flex:1;width:100%}
+#graphCard{display:flex;flex-direction:column;min-height:0}
+#graphWrap{flex:1;overflow:auto;min-height:260px}
+svg{display:block}
+.fade{animation:fade .7s ease-out both}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.head-glow{filter:drop-shadow(0 0 6px #f0f6fc) drop-shadow(0 0 12px var(--blue));animation:pulse 1.8s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.55}}
+#term{display:flex;align-items:center;gap:8px}
+#term span{color:var(--green)}
+#term input{border:0;background:transparent;font-family:ui-monospace,Consolas,monospace}
+#term input:focus{outline:none}
+#log{max-height:84px;overflow:auto;color:var(--mut);font-size:12px;margin-bottom:6px}
+#log .e{color:var(--red)}
+#files div{padding:6px 8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:#0d1117}
+#files small{display:block;color:var(--mut);white-space:pre-wrap;word-break:break-word}
+#ds{font-size:18px;color:var(--blue);word-break:break-word}
+#toast{position:fixed;right:16px;bottom:16px;padding:10px 14px;border-radius:10px;color:#fff;opacity:0;transform:translateY(8px);transition:.25s;pointer-events:none;max-width:360px;z-index:5}
+#toast.on{opacity:1;transform:none}
+#toast.ok{background:#238636}
+#toast.err{background:#da3633}
+.empty{color:var(--mut)}
+@media(max-width:900px){#main{grid-template-columns:1fr}body{height:auto}}
+@media(prefers-reduced-motion:reduce){.fade,.head-glow{animation:none}}
+</style>
+</head>
+<body>
+<header id="top" class="card">
+  <h1>Mini Git Visualizer</h1>
+  <span class="badge">branch <b id="branchBadge">-</b></span>
+  <span class="badge">HEAD <b id="headBadge" class="mono">-</b></span>
+</header>
+
+<div id="main">
+  <aside id="left">
+    <div class="card">
+      <h2>Commands</h2>
+      <div class="row"><button data-act="init">Init</button></div>
+      <div class="row"><button data-act="add">Add file</button><input id="addName" placeholder="name"><input id="addContent" placeholder="content"></div>
+      <div class="row"><button data-act="commit">Commit</button><input id="commitMsg" placeholder="message"></div>
+      <div class="row"><button data-act="branch">Branch</button><input id="branchName" placeholder="name"></div>
+      <div class="row"><button data-act="checkout">Checkout</button><input id="checkoutName" placeholder="branch"></div>
+      <div class="row"><button data-act="merge">Merge</button><input id="mergeName" placeholder="branch"></div>
+      <div class="row"><button data-act="undo">Undo</button></div>
+    </div>
+    <div class="card">
+      <button class="go" id="demoBtn" style="width:100%">Run Demo</button>
+    </div>
+  </aside>
+
+  <section id="graphCard" class="card">
+    <h2>Commit graph</h2>
+    <div id="graphWrap"></div>
+  </section>
+
+  <aside id="right">
+    <div class="card"><h2>Current files</h2><div id="files"><span class="empty">No files yet</span></div></div>
+    <div class="card"><h2>DS Used</h2><div id="ds" class="mono">-</div></div>
+  </aside>
+</div>
+
+<footer class="card">
+  <div id="log" class="mono"></div>
+  <div id="term" class="mono"><span>&gt;</span><input id="cmd" placeholder="init, add a.txt hello, commit msg, log, branch x, checkout x, merge x, undo" autocomplete="off" spellcheck="false"></div>
+</footer>
+<div id="toast"></div>
+
+<script>
+const COLORS=["#58a6ff","#3fb950","#d29922","#bc8cff","#f778ba","#ff7b72","#39c5cf","#ffa657"];
+const $=id=>document.getElementById(id);
+let state={commits:[],branches:{},head:"",branch:"",files:{}};
+let seen=new Set(), busy=false, toastTimer;
+
+function toast(msg,ok){const t=$("toast");t.textContent=msg;t.className=(ok?"ok":"err")+" on";clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove("on"),2600)}
+function logLine(cmd,msg,ok){const d=document.createElement("div");if(!ok)d.className="e";d.textContent="> "+cmd+(msg?"  -  "+msg:"");$("log").appendChild(d);$("log").scrollTop=1e9}
+
+// Accept a few spellings of the engine's fields so small format differences don't break the UI.
+function normalize(j){
+  const out={};
+  out.ok=!(j.ok===false||j.success===false||j.error||j.status==="error"||j.status==="conflict"||j.conflict===true);
+  out.msg=j.error||j.message||j.msg||j.result||"";
+  if(typeof out.msg!=="string")out.msg=JSON.stringify(out.msg);
+  out.ds=j.ds;
+  let cs=j.commits||j.log||j.graph;
+  if(cs&&!Array.isArray(cs)&&cs.commits)cs=cs.commits;
+  if(Array.isArray(cs)){
+    out.commits=cs.map(c=>{
+      let p=c.parents||(c.parent!==undefined?[c.parent]:[]);
+      if(!Array.isArray(p))p=[p];
+      p=p.filter(x=>x!==null&&x!==undefined&&x!==""&&x!==-1&&x!=="none"&&x!=="null").map(String);
+      return{id:String(c.id??c.hash),msg:c.message||c.msg||"",parents:p,branch:c.branch}
+    });
+  }
+  let br=j.branches;
+  if(Array.isArray(br)){const o={};br.forEach(b=>o[b.name]=String(b.commit??b.id??b.head));br=o}
+  if(br&&typeof br==="object"){out.branches={};for(const k in br)out.branches[k]=String(br[k])}
+  const h=j.head??j.head_id??j.HEAD;
+  if(h!==undefined&&h!==null)out.head=String(h&&h.id!==undefined?h.id:h);
+  const b=j.current_branch||j.branch||j.current;
+  if(typeof b==="string")out.branch=b;
+  let f=j.files;
+  if(Array.isArray(f)){const o={};f.forEach(x=>o[x.name||x.file]=x.content??"");f=o}
+  if(f&&typeof f==="object")out.files=f;
+  return out;
+}
+
+function layout(){
+  const byId={};state.commits.forEach(c=>byId[c.id]=c);
+  const depth={};
+  const d=c=>{if(depth[c.id]!==undefined)return depth[c.id];depth[c.id]=0;
+    let m=-1;c.parents.forEach(p=>{if(byId[p])m=Math.max(m,d(byId[p]))});return depth[c.id]=m+1};
+  state.commits.forEach(d);
+  // lane = first branch whose first-parent chain reaches the commit (main first)
+  const names=Object.keys(state.branches).sort((a,b)=>(a==="main"?-1:b==="main"?1:0)||(a===state.branch?-1:b===state.branch?1:0));
+  const owner={};
+  names.forEach(n=>{let c=byId[state.branches[n]];while(c&&owner[c.id]===undefined){owner[c.id]=n;c=byId[c.parents[0]]}});
+  const lanes=[];
+  state.commits.forEach(c=>{const n=c.branch||owner[c.id]||names[0]||"main";if(!lanes.includes(n))lanes.push(n);c._lane=n});
+  names.forEach(n=>{if(!lanes.includes(n))lanes.push(n)});
+  const order=state.commits.slice();
+  const col={};
+  order.forEach(c=>{col[c.id]=depth[c.id]});
+  return{byId,lanes,col};
+}
+
+function renderGraph(){
+  const wrap=$("graphWrap");
+  if(!state.commits.length){wrap.innerHTML='<div class="empty">No commits yet. Run init, add a file, then commit.</div>';return}
+  const{byId,lanes,col}=layout();
+  const X0=60,DX=96,Y0=70,DY=80,R=14;
+  const maxCol=Math.max(...Object.values(col));
+  const W=X0*2+maxCol*DX,H=Y0+(lanes.length-1)*DY+60;
+  const pos=c=>({x:X0+col[c.id]*DX,y:Y0+lanes.indexOf(c._lane)*DY});
+  const color=n=>COLORS[Math.max(0,lanes.indexOf(n))%COLORS.length];
+  let s=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+  state.commits.forEach(c=>{
+    const a=pos(c);
+    c.parents.forEach((pid,i)=>{
+      const p=byId[pid];if(!p)return;const b=pos(p);
+      const mx=(a.x+b.x)/2;
+      const col2=i===0?color(c._lane):color(p._lane);
+      s+=`<path class="${seen.has(c.id)?"":"fade"}" d="M${b.x},${b.y} C${mx},${b.y} ${mx},${a.y} ${a.x},${a.y}" fill="none" stroke="${col2}" stroke-width="3" ${i?'stroke-dasharray="1 0"':''} opacity=".85"/>`;
+    });
+  });
+  state.commits.forEach(c=>{
+    const q=pos(c),k=color(c._lane),isHead=c.id===state.head,isNew=!seen.has(c.id);
+    s+=`<g class="${isNew?"fade":""}">`;
+    if(isHead)s+=`<circle class="head-glow" cx="${q.x}" cy="${q.y}" r="${R+6}" fill="none" stroke="#f0f6fc" stroke-width="2.5"/>`;
+    s+=`<circle cx="${q.x}" cy="${q.y}" r="${R}" fill="#0d1117" stroke="${k}" stroke-width="3.5"/>`;
+    s+=`<text x="${q.x}" y="${q.y+4}" text-anchor="middle" font-size="11" fill="#e6edf3" font-family="ui-monospace,Consolas,monospace">${esc(c.id.slice(0,4))}</text>`;
+    s+=`<text x="${q.x}" y="${q.y+R+18}" text-anchor="middle" font-size="11" fill="#8b949e">${esc(c.msg.slice(0,14))}</text>`;
+    s+=`</g>`;
+  });
+  const tips={};
+  Object.entries(state.branches).forEach(([n,id])=>{(tips[id]=tips[id]||[]).push(n)});
+  Object.entries(tips).forEach(([id,ns])=>{
+    const c=byId[id];if(!c)return;const q=pos(c);
+    ns.forEach((n,i)=>{
+      const w=n.length*7+20,y=q.y-R-30-i*24,k=color(n),cur=n===state.branch;
+      s+=`<g><rect x="${q.x-w/2}" y="${y}" width="${w}" height="20" rx="10" fill="${k}" fill-opacity="${cur?1:.25}" stroke="${k}"/>`+
+         `<text x="${q.x}" y="${y+14}" text-anchor="middle" font-size="12" font-weight="600" fill="${cur?"#0d1117":"#e6edf3"}">${esc(n)}</text></g>`;
+    });
+  });
+  s+="</svg>";
+  wrap.innerHTML=s;
+  state.commits.forEach(c=>seen.add(c.id));
+}
+
+function esc(t){return String(t).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]))}
+
+function renderSide(){
+  $("branchBadge").textContent=state.branch||"-";
+  $("headBadge").textContent=state.head?state.head.slice(0,7):"-";
+  const names=Object.keys(state.files);
+  $("files").innerHTML=names.length?names.map(n=>`<div><b class="mono">${esc(n)}</b><small>${esc(state.files[n])}</small></div>`).join(""):'<span class="empty">No files yet</span>';
+}
+
+function apply(j){
+  const n=normalize(j);
+  if(n.commits){
+    state.commits=n.commits;
+    if(!n.commits.length)seen=new Set();
+  }
+  if(n.branches)state.branches=n.branches;
+  if(n.head!==undefined)state.head=n.head;
+  if(n.branch!==undefined)state.branch=n.branch;
+  if(n.files)state.files=n.files;
+  if(!n.head&&n.branches&&state.branch&&state.branches[state.branch])state.head=state.branches[state.branch];
+  if(n.ds!==undefined)$("ds").textContent=typeof n.ds==="string"?n.ds:JSON.stringify(n.ds);
+  renderSide();renderGraph();
+  return n;
+}
+
+async function run(cmd){
+  cmd=cmd.trim();if(!cmd)return false;
+  try{
+    const r=await fetch("/run?cmd="+encodeURIComponent(cmd));
+    const j=await r.json();
+    const n=apply(j);
+    toast(n.msg||(n.ok?"Done: "+cmd:"Command failed"),n.ok);
+    logLine(cmd,n.msg,n.ok);
+    return n.ok;
+  }catch(e){
+    toast("Cannot reach server: "+e.message,false);logLine(cmd,e.message,false);return false;
+  }
+}
+
+document.querySelectorAll("button[data-act]").forEach(b=>b.onclick=()=>{
+  const v=id=>$(id).value.trim();
+  const a=b.dataset.act;
+  let cmd;
+  if(a==="init"||a==="undo")cmd=a;
+  else if(a==="add"){if(!v("addName"))return toast("Enter a file name",false);cmd=`add ${v("addName")} ${$("addContent").value}`}
+  else if(a==="commit"){if(!v("commitMsg"))return toast("Enter a commit message",false);cmd="commit "+v("commitMsg")}
+  else{const id={branch:"branchName",checkout:"checkoutName",merge:"mergeName"}[a];if(!v(id))return toast("Enter a branch name",false);cmd=a+" "+v(id)}
+  run(cmd);
+});
+
+$("cmd").addEventListener("keydown",e=>{if(e.key==="Enter"){const c=e.target.value;e.target.value="";run(c)}});
+
+const DEMO=["init","add notes.txt Hello","commit first","add notes.txt HelloDS","commit second","branch feature","checkout feature","add notes.txt Final","commit feature work","checkout main","add extra.txt Bonus","commit added file","merge feature","undo"];
+$("demoBtn").onclick=async()=>{
+  if(busy)return;busy=true;$("demoBtn").disabled=true;
+  for(const c of DEMO){await run(c);await new Promise(r=>setTimeout(r,1000))}
+  busy=false;$("demoBtn").disabled=false;
+};
+renderGraph();
+</script>
+</body>
+</html>
